@@ -35,10 +35,57 @@ module Clients
       end
     end
 
+    ATS_TYPES = %i[workday icims greenhouse].freeze
+
+    ATS_TYPES.each do |ats_type|
+      define_method(ats_type) do
+        @integration.ats
+      end
+    end
+
+    AUTH_HEADERS = {
+      greenhouse: ->(client) { { 'Authorization': client.authorization, 'On-Behalf-Of': client.greenhouse_user_id.to_s } },
+      workday: ->(client) { { 'Authorization': client.authorization } },
+      icims: ->(client) { { 'Authorization': client.authorization } }
+    }.freeze
+
+    API_ENDPOINTS = {
+      fetch_candidates: "/candidates",
+      fetch_jobs: "/jobs",
+      fetch_applications: "/applications"
+    }.freeze
+
+    API_ENDPOINTS.each do |method_name, path|
+      define_method(method_name) do
+        connection.get(path)
+      end
+    end
+
+    ERROR_HANDLERS = {
+      401 => ->(client, response) { client.log_error("Unauthorized access: #{response.body}") },
+      404 => ->(client, response) { client.log_error("Resource not found: #{response.body}") },
+      500 => ->(client, response) { client.log_error("Server error: #{response.body}") }
+    }.freeze
+
     def initialize(integration, **opts)
       @integration = integration
       @opts = opts
       prepare_connection
+    end
+
+    def authorization
+      @_auth ||= "Basic #{encoded_auth}"
+    end
+
+    def encoded_auth
+      case @integration.type
+      when :icims
+        Base64.strict_encode64("#{icims.username}:#{icims.decrypted_password}")
+      when :greenhouse
+        Base64.strict_encode64("#{@api_key}:")
+      else
+        raise NotImplementedError, "Unsupported ATS type: #{@integration.type}"
+      end
     end
 
     def prepare_connection
@@ -71,50 +118,10 @@ module Clients
       end
     end
 
-    def default_error_handler(response)
-      notify_bugsnag("Unhandled error", response)
-      raise StandardError.new("Unhandled error")
-    end
-
-    def notify_bugsnag(msg, response)
-      Bugsnag.notify(msg) do |report|
-        report.add_tab(:request, {
-          method: response.env[:method],
-          url: response.env[:url].to_s
-        })
-        report.add_tab(:response, {
-          status: response.status,
-          body: response.body
-        })
-      end
-    end
-
-    def datadog_unauthenticated_event(event_context)
-      return unless Rails.env.production?
-
-      integration = event_context[:integration]
-      error_type = event_context[:error_type]
-      url = event_context[:url]
-      job_ids = event_context[:job_ids]
-
-      message = "#{integration.ats_type} Integration disabled, Integration ID: #{integration.id}, Employer ID: #{integration.hs_employer_id}, Error Type: #{error_type}"
-      message += ", URL: #{url}" if url
-      message += ", Job IDs: #{job_ids}" if job_ids
-
-      Datadog.statsd.event(
-        DATADOG_INTEGRATION_DISABLED,
-        message,
-        aggregation_key: integration.id.to_s,
-        alert_type: "warning",
-        tags: [%w[feature:ats], %w[team:employer]]
-      )
-    end
-
     private
 
     def auth_headers
-      # Subclasses should override this method to provide authorization headers
-      {}
+      AUTH_HEADERS.fetch(@integration.type, ->(_) { raise NotImplementedError, "Unsupported ATS type" }).call(self)
     end
   end
 end

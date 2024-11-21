@@ -1,6 +1,3 @@
-require_relative '../base_client'
-require 'base64'
-
 module Clients
   module Greenhouse
     class Api < BaseClient
@@ -40,17 +37,6 @@ module Clients
         super
       end
 
-      def auth_headers
-        {
-          'Authorization': authorization,
-          'On-Behalf-Of': greenhouse_user_id.to_s
-        }
-      end
-
-      def authorization
-        @_auth ||= "Basic #{encoded_auth}"
-      end
-
       def encoded_auth
         Base64.strict_encode64("#{@api_key}:")
       end
@@ -62,10 +48,6 @@ module Clients
                    when :job_board
                      greenhouse.decrypted_job_board_api_key
                    end
-      end
-
-      def greenhouse
-        @integration.ats
       end
 
       def greenhouse_user_id
